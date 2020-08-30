@@ -24,6 +24,20 @@ elif [ "$1" == "blank_linux" ]; then
     echo linux > ../../etc/openplc_platform
     echo blank_linux > ../../etc/openplc_driver
     
+elif [ "$1" == "comm5" ]; then
+    echo "Activating Comm5 MA-4200 driver"
+    cp ../hardware_layers/comm5ma4200.cpp ./hardware_layer.cpp
+    echo "Setting Platform"
+    echo win > ../../etc/openplc_platform
+    echo comm5 > ../../etc/openplc_driver
+
+elif [ "$1" == "comm5_linux" ]; then
+    echo "Activating Comm5 MA-4200 driver"
+    cp ../hardware_layers/comm5ma4200.cpp ./hardware_layer.cpp
+    echo "Setting Platform"
+    echo linux > ../../etc/openplc_platform
+    echo comm5 > ../../etc/openplc_driver
+
 elif [ "$1" == "fischertechnik" ]; then
     echo "Activating Fischertechnik driver"
     cp ../hardware_layers/fischertechnik.cpp ./hardware_layer.cpp
