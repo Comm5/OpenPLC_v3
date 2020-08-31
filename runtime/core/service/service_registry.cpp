@@ -35,7 +35,9 @@ ServiceDefinition* services[] = {
 #ifdef OPLC_DNP3_OUTSTATION
     new ServiceDefinition("dnp3s", dnp3s_service_run),
 #endif
+#ifdef OPLC_EIP
     new ServiceDefinition("enip", enip_service_run)
+#endif
 };
 
 ServiceDefinition* services_find(const char* name)

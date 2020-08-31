@@ -58,6 +58,7 @@ option(OPLC_GLUE_GENERATOR "Build gluerator" OFF)
 
 option(OPLC_ALL_SUPPORTING_LIBRARIES "Build required libraries" OFF)
 option(OPLC_MODBUS "Enable Modbus" OFF)
+option(OPLC_EIP "Enable Ehernet/IP" OFF)
 option(OPLC_DNP3_OUTSTATION "Enable the DNP3 outstation" OFF)
 
 option(OPLC_BUILD_USER_APPLICATION "Build the user application from ST" ON)
@@ -232,7 +233,13 @@ if(OPLC_MAIN_PROGRAM)
     message("Compile main program enabled")
 
     set(OPLC_USER_DIR ${PROJECT_SOURCE_DIR}/etc/src)
-    file(GLOB oplc_SRC runtime/core/*.cpp runtime/core/dnp3s/*.cpp runtime/core/modbusslave/*.cpp runtime/core/modbusmaster/*.cpp runtime/core/service/*.cpp runtime/core/enip/*.cpp runtime/vendor/inih-r46/*.c)
+    file(GLOB oplc_SRC runtime/core/*.cpp runtime/core/dnp3s/*.cpp runtime/core/modbusslave/*.cpp runtime/core/modbusmaster/*.cpp runtime/core/service/*.cpp runtime/vendor/inih-r46/*.c)
+    file(GLOB oplc_eip_SRC runtime/core/enip/*.cpp)
+
+    if (OPLC_EIP)
+        set(oplc_SRC oplc_SRC oplc_eip_SRC)
+        add_definitions(OPLC_EIP)
+    endif()
 
     include_directories(${OPLC_USER_DIR})
     include_directories(runtime/core)
