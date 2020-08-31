@@ -172,12 +172,8 @@ add_custom_target(dependent_tools ALL
 if(OPLC_MODBUS)
     message("Build and install LIBMODBUS enabled")
     include_directories(utils/libmodbus_src/src)
-    ExternalProject_Add(libmodbus_proj
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/utils/libmodbus_src
-        BUILD_IN_SOURCE 1
-        CONFIGURE_COMMAND ./autogen.sh COMMAND ./configure --prefix=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/..
-        BUILD_COMMAND ${MAKE}
-        COMMENT "LIBMODBUS INSTALLED")
+    add_subdirectory(utils/libmodbus_src)
+    add_library(libmodbus.so ALIAS modbus)
 else()
     include_directories(utils/libmodbus_src/src)
 endif()
@@ -254,7 +250,7 @@ if(OPLC_MAIN_PROGRAM)
 
     add_dependencies(openplc files_generator)
     if(OPLC_MODBUS)
-        add_dependencies(openplc libmodbus_proj)
+        add_dependencies(openplc modbus)
     endif()
 
     target_link_libraries(openplc ${OPLC_PTHREAD} modbus)
