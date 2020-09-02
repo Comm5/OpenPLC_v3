@@ -73,4 +73,9 @@ if (UNIX)
     add_library(oplcfischertechnik ${oplc_nohw_SRC} ../hardware_layers/fischertechnik.cpp)
     target_include_directories(oplcfischertechnik SYSTEM PUBLIC ../test/mock_headers)
     target_link_libraries(oplcfischertechnik LINK_PUBLIC asiodnp3 libmodbus.so ${OPLC_PTHREAD})
+
+    # Default application built for Comm5 MA-4200 
+    add_library(oplccomm5 ${oplc_nohw_SRC} ../hardware_layers/comm5ma4200.cpp)
+    target_include_directories(oplccomm5 SYSTEM PUBLIC ../test/mock_headers)
+    target_link_libraries(oplccomm5 LINK_PUBLIC asiodnp3 libmodbus.so ${OPLC_PTHREAD})
 endif()

@@ -22,18 +22,40 @@
 
 #include <mutex>
 #include <string>
+#include <atomic>
 
 #include <wiringSerial.h>
 
 #include "ladder.h"
 #include "custom_layer.h"
 
+#if !defined(ARRAY_SIZE)
+    #define ARRAY_SIZE(x) (sizeof((x)) / sizeof((x)[0]))
+#endif
+
+#define bitRead(value, bit) (((value) >> (bit)) & 0x01)
+#define bitSet(value, bit) ((value) |= (1UL << (bit)))
+#define bitClear(value, bit) ((value) &= ~(1UL << (bit)))
+#define bitWrite(value, bit, bitvalue) (bitvalue ? bitSet(value, bit) : bitClear(value, bit))
+
+
 /** @addtogroup comm5ma4200  MA-4200 I/O Module from Comm5
-  * \brief A template with placeholder functions
+  * \brief MA-4200 is a 8 Digital Inputs and 8 Relay outputs device from Comm5.
   * \ingroup hardware_layers
   *  @{ */
 
 int serialFd; //serial file descriptor
+volatile bool keepRunning; // Flag to signal working thread to quit
+
+std::string frame;
+size_t frameSize;
+uint16_t frameCRC;
+
+bool initSensorData;
+std::atomic<std::uint32_t> lastKnownSensorState(0);
+std::atomic<std::uint32_t> relayStatus;
+
+std::shared_ptr<std::thread> m_thread;
 
 enum {
 	STSTART_OCTET1,
@@ -111,7 +133,7 @@ static void ParseData(const unsigned char* data, const size_t len)
 
 			}
 			else {
-				_log.Log(LOG_ERROR, "Comm5 MA-4200: Framing error");
+				printf("Comm5 MA-4200: Framing error\n");
 				currentState = STSTART_OCTET1;
 			}
 			break;
@@ -123,7 +145,7 @@ static void ParseData(const unsigned char* data, const size_t len)
 				currentState = STFRAME_SIZE;
 			}
 			else {
-				_log.Log(LOG_ERROR, "Comm5 MA-4200: Framing error");
+				printf("Comm5 MA-4200: Framing error\n");
 				currentState = STSTART_OCTET1;
 			}
 			break;
@@ -192,7 +214,7 @@ void requestDigitalInputResponseHandler(const std::string & frame)
 			SendSwitch((i + 1) << 8, 1, 255, on, 0, "Sensor " + boost::lexical_cast<std::string>(i + 1));
 		}
 	}
-	lastKnownSensorState = sensorStatus;
+	lastKnownSensorState.store(sensorStatus);
 	initSensorData = false;
 	reqState = Idle;
 }
@@ -215,6 +237,16 @@ static void parseFrame(std::string & frame)
 	}
 }
 
+void handleSerialRead() {
+	keepRunning = true;
+
+	while(keepRunning) {
+		unsigned char data = serialGetchar(serialFd);
+		ParseData(&data, 1);
+	}
+
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 /// \brief Initialization procedures
 ///
@@ -223,12 +255,14 @@ static void parseFrame(std::string & frame)
 ////////////////////////////////////////////////////////////////////////////////
 void initializeHardware()
 {
-	serialFd = serialOpen("/dev/ttyUSB0", 9600);
+	serialFd = serialOpen("/dev/ttyUSB0", 115200);
 	if (serialFd < 0)
 	{
 		printf("Error trying to open serial port\n");
 		exit(1);
 	}
+	
+	m_thread = std::make_shared<std::thread>(&handleSerialRead);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -239,7 +273,11 @@ void initializeHardware()
 ////////////////////////////////////////////////////////////////////////////////
 void finalizeHardware()
 {
-	// serialClose(serialFd) // no serialClose for now. Eventually
+	keepRunning = false;
+	m_thread->join();
+	m_thread.reset();
+
+	serialClose(serialFd) // no serialClose for now. Eventually
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -262,6 +300,13 @@ void updateBuffersIn()
 	write_analog_output(0, *int_output[0]);
 
 	**************************************************/
+
+	auto sensorData = lastKnownSensorState.load();
+	for (i = 0; i < 8; i++)
+	{
+		if (pinNotPresent(ignored_bool_inputs, ARRAY_SIZE(ignored_bool_inputs), i))
+			if (bool_input[0][i] != NULL) * bool_input[0][i] = (sensorData >> i) & 0x01;
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -284,6 +329,17 @@ void updateBuffersOut()
 	write_analog_output(0, *int_output[0]);
 
 	**************************************************/
+	std::string data("\x02\x02", 2);
+	unsigned char bitMask = 0;
+
+	for (int i = 0; i < 8; i++)
+	{
+		if (pinNotPresent(ignored_bool_outputs, ARRAY_SIZE(ignored_bool_outputs), i))
+			if (bool_output[i/8][i%8] != NULL) bitWrite(bitMask, i, *bool_output[i/8][i%8]);
+	}
+
+	data.push_back(relayMask);
+	writeFrame(data);
 }
 
 /** @} */
