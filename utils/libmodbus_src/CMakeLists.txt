@@ -2,7 +2,7 @@
 # Copyright Ongun Kanat
 
 cmake_minimum_required(VERSION 3.0)
-project(libmodbus VERSION 3.1.4)
+project(libmodbus VERSION 3.1.6)
 
 #### CONFIGURATION ####
 set(LIBMODBUS_VERSION ${PROJECT_VERSION})
@@ -29,6 +29,7 @@ check_include_file(sys/types.h HAVE_SYS_TYPES_H)
 check_include_file(termios.h HAVE_TERMIOS_H)
 check_include_file(time.h HAVE_TIME_H)
 check_include_file(unistd.h HAVE_UNISTD_H)
+check_include_file(winsock2.h HAVE_WINSOCK2_H)
 
 include(CheckFunctionExists)
 check_function_exists(accept4 HAVE_ACCEPT4)
