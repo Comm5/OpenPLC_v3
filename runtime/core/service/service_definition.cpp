@@ -131,7 +131,7 @@ void ServiceDefinition::start(const char* config)
 
     this->running = true;
     pthread_create(&this->thread, NULL, &ServiceDefinition::run_service, this);
-    pthread_setname_np(this->thread, this->name);
+
 }
 
 void ServiceDefinition::stop()

@@ -23,8 +23,89 @@
 #include <mutex>
 #include <string>
 #include <atomic>
+#include <memory>
+#include <thread>
 
-#include <wiringSerial.h>
+//#include <wiringSerial.h>
+#include <Windows.h>
+
+#include <spdlog/spdlog.h>
+
+static void serialClose(uintptr_t fd) {
+	HANDLE io_handler_ = (HANDLE)fd;
+	CloseHandle(io_handler_);
+}
+
+static uintptr_t serialOpen(const char* device, const int baud)
+{
+	std::string deviceName = "\\\\.\\";
+	deviceName.append(device);
+
+	auto io_handler_ = CreateFileA(static_cast<LPCSTR>(deviceName.c_str()),
+							GENERIC_READ | GENERIC_WRITE,
+							0,
+							NULL,
+							OPEN_EXISTING,
+							FILE_ATTRIBUTE_NORMAL,
+							NULL);
+
+	if (io_handler_ == INVALID_HANDLE_VALUE) {
+
+		if (GetLastError() == ERROR_FILE_NOT_FOUND)
+			printf("Warning: Handle was not attached. Reason: %s not available\n", device);
+		return -1;
+	}
+	else {
+
+		DCB dcbSerialParams = { 0 };
+
+		if (!GetCommState(io_handler_, &dcbSerialParams)) {
+
+			printf("Warning: Failed to get current serial params");
+		}
+
+		else {
+			dcbSerialParams.BaudRate = baud;
+			dcbSerialParams.ByteSize = 8;
+			dcbSerialParams.StopBits = ONESTOPBIT;
+			dcbSerialParams.Parity = NOPARITY;
+			dcbSerialParams.fDtrControl = DTR_CONTROL_ENABLE;
+
+			if (!SetCommState(io_handler_, &dcbSerialParams))
+				printf("Warning: could not set serial port params\n");
+			else {
+				PurgeComm(io_handler_, PURGE_RXCLEAR | PURGE_TXCLEAR);				
+			}
+		}
+	}
+    return (uintptr_t)io_handler_;
+}
+
+static void serialPutchar(const uintptr_t fd, const unsigned char c) {
+	HANDLE io_handler_ = (HANDLE)fd;
+	DWORD bytes_sent;
+	WriteFile(io_handler_, (void*)&c, 1, &bytes_sent, NULL);
+}
+
+static int serialDataAvail(const uintptr_t fd)
+{
+	HANDLE io_handler_ = (HANDLE)fd;
+	COMSTAT status_;
+	DWORD errors_;
+
+	ClearCommError(io_handler_, &errors_, &status_);
+
+    return status_.cbInQue;
+}
+
+static int serialGetchar(const uintptr_t fd)
+{
+	HANDLE io_handler_ = (HANDLE)fd;
+	char inc_msg[1];
+	DWORD bytes_read;
+	ReadFile(io_handler_, inc_msg, 1, &bytes_read, NULL);
+    return inc_msg[0];
+}
 
 #include "ladder.h"
 #include "custom_layer.h"
@@ -37,7 +118,6 @@
 #define bitSet(value, bit) ((value) |= (1UL << (bit)))
 #define bitClear(value, bit) ((value) &= ~(1UL << (bit)))
 #define bitWrite(value, bit, bitvalue) (bitvalue ? bitSet(value, bit) : bitClear(value, bit))
-
 
 /** @addtogroup comm5ma4200  MA-4200 I/O Module from Comm5
   * \brief MA-4200 is a 8 Digital Inputs and 8 Relay outputs device from Comm5.
@@ -67,10 +147,20 @@ enum {
 	STFRAME_CRC2
 } currentState;
 
+enum RequestState {
+	Idle,
+	QueryRelayState,
+	QuerySensorState
+} reqState;
+
+// Forward declarations
+static void parseFrame(std::string & frame);
+
 static void write(std::string& data)
 {
 	for( int i = 0; i < data.size(); ++i ) {
-		serialPutchar(serialFd, data.at(i));
+		serialPutchar(serialFd, (unsigned char)data.at(i));
+		//printf("Write byte %x\n", ((int)data.at(i)) & 0xFF);
 	}
 }
 
@@ -105,16 +195,29 @@ static void writeFrame(const std::string & data)
 	crc = crc16_update(crc, 0);
 	crc = crc16_update(crc, 0);
 
-	frame.append(1, crc >> 8);
-	frame.append(1, crc & 0xFF);
+	frame.append(1, ( crc >> 8 ) & 0xFF);
+	frame.append(1, ( crc      ) & 0xFF);
 	write(frame);
-	return true;
 }
 
 static void querySensorState()
 {
 	//                  id    mask
 	std::string data("\x01\xFF", 2);
+	writeFrame(data);
+}
+
+void enableNotifications()
+{
+	//                 id  op  on/off  mask
+	std::string data("\x04\x02\x01\xFF", 4);
+	writeFrame(data);
+}
+
+static void requestProtocolVersion() 
+{
+	//                  id
+	std::string data("\x00", 1);
 	writeFrame(data);
 }
 
@@ -133,7 +236,7 @@ static void ParseData(const unsigned char* data, const size_t len)
 
 			}
 			else {
-				printf("Comm5 MA-4200: Framing error\n");
+				spdlog::error("Comm5 MA-4200: Framing error\n");
 				currentState = STSTART_OCTET1;
 			}
 			break;
@@ -145,7 +248,7 @@ static void ParseData(const unsigned char* data, const size_t len)
 				currentState = STFRAME_SIZE;
 			}
 			else {
-				printf("Comm5 MA-4200: Framing error\n");
+				spdlog::error("Comm5 MA-4200: Framing error\n");
 				currentState = STSTART_OCTET1;
 			}
 			break;
@@ -180,9 +283,13 @@ static void ParseData(const unsigned char* data, const size_t len)
 		case STFRAME_CRC2:
 			frame.push_back(data[i]);
 			frameCRC = crc16_update(frameCRC, 0);
-			readCRC =  (uint16_t)(frame.at(frame.size() - 2) << 8) | frame.at(frame.size() - 1);
+			readCRC = frame.at(frame.size() - 2);
+			readCRC <<= 8;
+			readCRC |= data[i];
 			if (frameCRC == readCRC)
 				parseFrame(frame);
+			else
+				spdlog::error("Comm5 MA-4200: CRC Framing error read {} expected {}\n", readCRC, frameCRC);
 			currentState = STSTART_OCTET1;
 			frame.clear();
 			break;
@@ -199,8 +306,18 @@ void requestDigitalOutputResponseHandler(const std::string & frame)
 	relayStatus = frame[6];
 	for (int i = 0; i < 8; ++i) {
 		bool on = (relayStatus & (1 << i)) != 0 ? true : false;
-		SendSwitch(i + 1, 1, 255, on, 0, "Relay " + boost::lexical_cast<std::string>(i + 1));
+		//SendSwitch(i + 1, 1, 255, on, 0, "Relay " + boost::lexical_cast<std::string>(i + 1));
 	}
+	printf("requestDigitalOutputResponseHandler: %x", (int)relayStatus);
+}
+
+void enableNotificationResponseHandler(const std::string & frame)
+{
+	uint8_t operation = frame[5];
+	uint8_t operationType = frame[6];
+	uint8_t mask = frame[7];
+
+	printf("NotificationResponseHandler: %x", (int)mask);
 }
 
 void requestDigitalInputResponseHandler(const std::string & frame)
@@ -208,19 +325,21 @@ void requestDigitalInputResponseHandler(const std::string & frame)
 	uint8_t mask = frame[5];
 	uint8_t sensorStatus = frame[6];
 
-	for (int i = 0; i < 8; ++i) {
-		bool on = (sensorStatus & (1 << i)) != 0 ? true : false;
-		if ((lastKnownSensorState & (1 << i) ^ (sensorStatus & (1 << i))) || initSensorData) {
-			SendSwitch((i + 1) << 8, 1, 255, on, 0, "Sensor " + boost::lexical_cast<std::string>(i + 1));
-		}
-	}
+	printf("requestDigitalInputResponseHandler: %x\n", (int)sensorStatus);
+	printf("requestDigitalInputResponseHandler: %x mask\n", (int)mask);
 	lastKnownSensorState.store(sensorStatus);
 	initSensorData = false;
 	reqState = Idle;
 }
 
+void requestProtocolVersionResponseHandler(const std::string & frame)
+{
+	printf("requestProtocolVersionResponseHandler\n");
+}
+
 static void parseFrame(std::string & frame)
 {
+	printf("Received frame: %x\n", (int)frame.at(4));
 	switch (frame.at(4)) {
 	case 0x00:
 		requestProtocolVersionResponseHandler(frame);
@@ -240,9 +359,20 @@ static void parseFrame(std::string & frame)
 void handleSerialRead() {
 	keepRunning = true;
 
+	requestProtocolVersion();
+	querySensorState();
+	enableNotifications();
 	while(keepRunning) {
-		unsigned char data = serialGetchar(serialFd);
-		ParseData(&data, 1);
+		if ( serialDataAvail(serialFd) > 0 ) {
+			unsigned char data = serialGetchar(serialFd);
+			printf("Received %x\n", (int)data);
+			ParseData(&data, 1);
+		}
+		else
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		//querySensorState();
 	}
 
 }
@@ -255,13 +385,21 @@ void handleSerialRead() {
 ////////////////////////////////////////////////////////////////////////////////
 void initializeHardware()
 {
-	serialFd = serialOpen("/dev/ttyUSB0", 115200);
+	serialFd = serialOpen("COM4", 115200);
 	if (serialFd < 0)
 	{
 		printf("Error trying to open serial port\n");
 		exit(1);
 	}
+
+	printf("Inicializando hardware layer Comm5 MA-4200\n");
 	
+	currentState = STSTART_OCTET1;
+	reqState = Idle;
+	lastKnownSensorState = 0;
+	frameSize = 0;
+	frameCRC = 0;
+
 	m_thread = std::make_shared<std::thread>(&handleSerialRead);
 }
 
@@ -277,7 +415,7 @@ void finalizeHardware()
 	m_thread->join();
 	m_thread.reset();
 
-	serialClose(serialFd) // no serialClose for now. Eventually
+	serialClose(serialFd);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -291,18 +429,9 @@ void updateBuffersIn()
 {
 	std::lock_guard<std::mutex> lock(bufferLock); //lock mutex
 
-	/*********READING AND WRITING TO I/O**************
-
-	*bool_input[0][0] = read_digital_input(0);
-	write_digital_output(0, *bool_output[0][0]);
-
-	*int_input[0] = read_analog_input(0);
-	write_analog_output(0, *int_output[0]);
-
-	**************************************************/
-
 	auto sensorData = lastKnownSensorState.load();
-	for (i = 0; i < 8; i++)
+	//printf("updateBuffersIn: %x\n", sensorData);
+	for (int i = 0; i < 8; i++)
 	{
 		if (pinNotPresent(ignored_bool_inputs, ARRAY_SIZE(ignored_bool_inputs), i))
 			if (bool_input[0][i] != NULL) * bool_input[0][i] = (sensorData >> i) & 0x01;
@@ -320,16 +449,6 @@ void updateBuffersOut()
 {
 	std::lock_guard<std::mutex> lock(bufferLock); //lock mutex
 
-	/*********READING AND WRITING TO I/O**************
-
-	*bool_input[0][0] = read_digital_input(0);
-	write_digital_output(0, *bool_output[0][0]);
-
-	*int_input[0] = read_analog_input(0);
-	write_analog_output(0, *int_output[0]);
-
-	**************************************************/
-	std::string data("\x02\x02", 2);
 	unsigned char bitMask = 0;
 
 	for (int i = 0; i < 8; i++)
@@ -338,8 +457,14 @@ void updateBuffersOut()
 			if (bool_output[i/8][i%8] != NULL) bitWrite(bitMask, i, *bool_output[i/8][i%8]);
 	}
 
-	data.push_back(relayMask);
-	writeFrame(data);
+	static unsigned char lastOutputStatus = 0;
+	if ( lastOutputStatus != bitMask ) {
+		std::string data("\x02\x02", 2);
+		data.push_back(bitMask);
+		writeFrame(data);
+		lastOutputStatus = bitMask;
+		printf("Wrote to relays: %x\n", (int)bitMask);
+	}
 }
 
 /** @} */
