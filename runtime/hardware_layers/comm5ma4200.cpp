@@ -26,89 +26,11 @@
 #include <memory>
 #include <thread>
 
-//#include <wiringSerial.h>
-#include <Windows.h>
-
 #include <spdlog/spdlog.h>
-
-static void serialClose(uintptr_t fd) {
-	HANDLE io_handler_ = (HANDLE)fd;
-	CloseHandle(io_handler_);
-}
-
-static uintptr_t serialOpen(const char* device, const int baud)
-{
-	std::string deviceName = "\\\\.\\";
-	deviceName.append(device);
-
-	auto io_handler_ = CreateFileA(static_cast<LPCSTR>(deviceName.c_str()),
-							GENERIC_READ | GENERIC_WRITE,
-							0,
-							NULL,
-							OPEN_EXISTING,
-							FILE_ATTRIBUTE_NORMAL,
-							NULL);
-
-	if (io_handler_ == INVALID_HANDLE_VALUE) {
-
-		if (GetLastError() == ERROR_FILE_NOT_FOUND)
-			printf("Warning: Handle was not attached. Reason: %s not available\n", device);
-		return -1;
-	}
-	else {
-
-		DCB dcbSerialParams = { 0 };
-
-		if (!GetCommState(io_handler_, &dcbSerialParams)) {
-
-			printf("Warning: Failed to get current serial params");
-		}
-
-		else {
-			dcbSerialParams.BaudRate = baud;
-			dcbSerialParams.ByteSize = 8;
-			dcbSerialParams.StopBits = ONESTOPBIT;
-			dcbSerialParams.Parity = NOPARITY;
-			dcbSerialParams.fDtrControl = DTR_CONTROL_ENABLE;
-
-			if (!SetCommState(io_handler_, &dcbSerialParams))
-				printf("Warning: could not set serial port params\n");
-			else {
-				PurgeComm(io_handler_, PURGE_RXCLEAR | PURGE_TXCLEAR);				
-			}
-		}
-	}
-    return (uintptr_t)io_handler_;
-}
-
-static void serialPutchar(const uintptr_t fd, const unsigned char c) {
-	HANDLE io_handler_ = (HANDLE)fd;
-	DWORD bytes_sent;
-	WriteFile(io_handler_, (void*)&c, 1, &bytes_sent, NULL);
-}
-
-static int serialDataAvail(const uintptr_t fd)
-{
-	HANDLE io_handler_ = (HANDLE)fd;
-	COMSTAT status_;
-	DWORD errors_;
-
-	ClearCommError(io_handler_, &errors_, &status_);
-
-    return status_.cbInQue;
-}
-
-static int serialGetchar(const uintptr_t fd)
-{
-	HANDLE io_handler_ = (HANDLE)fd;
-	char inc_msg[1];
-	DWORD bytes_read;
-	ReadFile(io_handler_, inc_msg, 1, &bytes_read, NULL);
-    return inc_msg[0];
-}
 
 #include "ladder.h"
 #include "custom_layer.h"
+#include "serialport.h"
 
 #if !defined(ARRAY_SIZE)
     #define ARRAY_SIZE(x) (sizeof((x)) / sizeof((x)[0]))
@@ -124,18 +46,17 @@ static int serialGetchar(const uintptr_t fd)
   * \ingroup hardware_layers
   *  @{ */
 
-int serialFd; //serial file descriptor
-volatile bool keepRunning; // Flag to signal working thread to quit
+SerialPort serialPort; // serial port instance
 
 std::string frame;
 size_t frameSize;
 uint16_t frameCRC;
+int inputCount = 8;
+int outputCount = 8;
 
 bool initSensorData;
 std::atomic<std::uint32_t> lastKnownSensorState(0);
 std::atomic<std::uint32_t> relayStatus;
-
-std::shared_ptr<std::thread> m_thread;
 
 enum {
 	STSTART_OCTET1,
@@ -155,14 +76,6 @@ enum RequestState {
 
 // Forward declarations
 static void parseFrame(std::string & frame);
-
-static void write(std::string& data)
-{
-	for( int i = 0; i < data.size(); ++i ) {
-		serialPutchar(serialFd, (unsigned char)data.at(i));
-		//printf("Write byte %x\n", ((int)data.at(i)) & 0xFF);
-	}
-}
 
 static uint16_t crc16_update(uint16_t crc, uint8_t data)
 {
@@ -197,7 +110,7 @@ static void writeFrame(const std::string & data)
 
 	frame.append(1, ( crc >> 8 ) & 0xFF);
 	frame.append(1, ( crc      ) & 0xFF);
-	write(frame);
+	serialPort.writeString(frame);
 }
 
 static void querySensorState()
@@ -335,6 +248,8 @@ void requestDigitalInputResponseHandler(const std::string & frame)
 void requestProtocolVersionResponseHandler(const std::string & frame)
 {
 	printf("requestProtocolVersionResponseHandler\n");
+	inputCount  = frame[4];
+	outputCount = frame[5];
 }
 
 static void parseFrame(std::string & frame)
@@ -356,27 +271,6 @@ static void parseFrame(std::string & frame)
 	}
 }
 
-void handleSerialRead() {
-	keepRunning = true;
-
-	requestProtocolVersion();
-	querySensorState();
-	enableNotifications();
-	while(keepRunning) {
-		if ( serialDataAvail(serialFd) > 0 ) {
-			unsigned char data = serialGetchar(serialFd);
-			printf("Received %x\n", (int)data);
-			ParseData(&data, 1);
-		}
-		else
-		{
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
-		}
-		//querySensorState();
-	}
-
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 /// \brief Initialization procedures
 ///
@@ -385,14 +279,13 @@ void handleSerialRead() {
 ////////////////////////////////////////////////////////////////////////////////
 void initializeHardware()
 {
-	serialFd = serialOpen("COM4", 115200);
-	if (serialFd < 0)
+	if (!serialPort.open("COM4", 115200))
 	{
-		printf("Error trying to open serial port\n");
-		exit(1);
+		spdlog::error("Comm5 MA-4200: Error trying to open serial port\n");
+		return;
 	}
 
-	printf("Inicializando hardware layer Comm5 MA-4200\n");
+	spdlog::info("Initializing hardware layer Comm5 MA-4200\n");
 	
 	currentState = STSTART_OCTET1;
 	reqState = Idle;
@@ -400,7 +293,11 @@ void initializeHardware()
 	frameSize = 0;
 	frameCRC = 0;
 
-	m_thread = std::make_shared<std::thread>(&handleSerialRead);
+	serialPort.setReadCallback(ParseData);
+
+	requestProtocolVersion();
+	querySensorState();
+	enableNotifications();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -411,11 +308,7 @@ void initializeHardware()
 ////////////////////////////////////////////////////////////////////////////////
 void finalizeHardware()
 {
-	keepRunning = false;
-	m_thread->join();
-	m_thread.reset();
-
-	serialClose(serialFd);
+	serialPort.close();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -430,8 +323,8 @@ void updateBuffersIn()
 	std::lock_guard<std::mutex> lock(bufferLock); //lock mutex
 
 	auto sensorData = lastKnownSensorState.load();
-	//printf("updateBuffersIn: %x\n", sensorData);
-	for (int i = 0; i < 8; i++)
+
+	for (int i = 0; i < inputCount; i++)
 	{
 		if (pinNotPresent(ignored_bool_inputs, ARRAY_SIZE(ignored_bool_inputs), i))
 			if (bool_input[0][i] != NULL) * bool_input[0][i] = (sensorData >> i) & 0x01;
@@ -449,15 +342,15 @@ void updateBuffersOut()
 {
 	std::lock_guard<std::mutex> lock(bufferLock); //lock mutex
 
-	unsigned char bitMask = 0;
+	uint32_t bitMask = 0;
 
-	for (int i = 0; i < 8; i++)
+	for (int i = 0; i < outputCount; i++)
 	{
 		if (pinNotPresent(ignored_bool_outputs, ARRAY_SIZE(ignored_bool_outputs), i))
 			if (bool_output[i/8][i%8] != NULL) bitWrite(bitMask, i, *bool_output[i/8][i%8]);
 	}
 
-	static unsigned char lastOutputStatus = 0;
+	static uint32_t lastOutputStatus = 0;
 	if ( lastOutputStatus != bitMask ) {
 		std::string data("\x02\x02", 2);
 		data.push_back(bitMask);
