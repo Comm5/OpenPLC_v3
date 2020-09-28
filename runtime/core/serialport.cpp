@@ -1,9 +1,3 @@
-/*
- * File:   AsyncSerial.cpp
- * Author: Terraneo Federico
- * Distributed under the Boost Software License, Version 1.0.
- * Created on September 7, 2009, 10:46 AM
- */
 // Copyright 2020 Comm5 Tecnologia
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -98,9 +92,11 @@ bool SerialPort::open(const std::string& devname, unsigned int baud_rate)
 	}
 	else 
     {
+        pimpl->fd = io_handler_;
+
 		DCB dcbSerialParams = { 0 };
 
-		if (!::GetCommState(io_handler_, &dcbSerialParams)) 
+		if (!::GetCommState(pimpl->fd, &dcbSerialParams)) 
         {
 			setErrorMessage("Failed to get current serial params");
             return false;
@@ -113,100 +109,104 @@ bool SerialPort::open(const std::string& devname, unsigned int baud_rate)
 			dcbSerialParams.Parity = NOPARITY;
 			dcbSerialParams.fDtrControl = DTR_CONTROL_ENABLE;
 
-			if (!::SetCommState(io_handler_, &dcbSerialParams)) 
+			if (!::SetCommState(pimpl->fd, &dcbSerialParams)) 
             {
 				setErrorMessage("Could not set serial port params\n");
                 return false;
 			} 
             else 
             {
-				::PurgeComm(io_handler_, PURGE_RXCLEAR | PURGE_TXCLEAR);				
+				::PurgeComm(pimpl->fd, PURGE_RXCLEAR | PURGE_TXCLEAR);				
 			}
 		}
 	}
-    pimpl->fd = io_handler_;
 
 #elif defined(__APPLE__) || defined(__linux__)
 
     speed_t speed;
     
     // Open port
-    pimpl->fd = ::open(devname.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (pimpl->fd < 0) 
+    auto io_handler_ = ::open(devname.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (io_handler_ < 0) {
         setErrorMessage("Failed to open port");
-    
-    // Set Port parameters.
-    struct termios new_attributes;
-    int status = tcgetattr(pimpl->fd, &new_attributes);
-    if(status < 0 || !isatty(pimpl->fd))
-    {
-        ::close(pimpl->fd);
-        setErrorMessage("Device is not a tty");
-        return false;
     }
-    new_attributes.c_iflag = IGNBRK;
-    new_attributes.c_oflag = 0;
-    new_attributes.c_lflag = 0;
-    new_attributes.c_cflag = (CS8 | CREAD | CLOCAL);//8 data bit,Enable receiver,Ignore modem
-    /* In non canonical mode (Ctrl-C and other disabled, no echo,...) VMIN and VTIME work this way:
-    if the function read() has'nt read at least VMIN chars it waits until has read at least VMIN
-    chars (even if VTIME timeout expires); once it has read at least vmin chars, if subsequent
-    chars do not arrive before VTIME expires, it returns error; if a char arrives, it resets the
-    timeout, so the internal timer will again start from zero (for the nex char,if any)*/
-    new_attributes.c_cc[VMIN]=1;// Minimum number of characters to read before returning error
-    new_attributes.c_cc[VTIME]=1;// Set timeouts in tenths of second
-
-    // Set baud rate
-    switch(baud_rate)
+    else 
     {
-        case 50:speed = B50; break;
-        case 75:speed = B75; break;
-        case 110:speed = B110; break;
-        case 134:speed = B134; break;
-        case 150:speed = B150; break;
-        case 200:speed = B200; break;
-        case 300:speed = B300; break;
-        case 600:speed = B600; break;
-        case 1200:speed = B1200; break;
-        case 1800:speed = B1800; break;
-        case 2400:speed = B2400; break;
-        case 4800:speed = B4800; break;
-        case 9600:speed = B9600; break;
-        case 19200:speed = B19200; break;
-        case 38400:speed = B38400; break;
-        case 57600:speed = B57600; break;
-        case 115200:speed = B115200; break;
-        case 230400:speed = B230400; break;
-#ifdef B307200
-        case 307200:speed = B307200; break;
-#endif
-#ifdef B460800
-        case 460800:speed = B460800; break;
-#endif
-        default:
+        pimpl->fd = io_handler_;
+        // Set Port parameters.
+        struct termios new_attributes;
+        int status = tcgetattr(pimpl->fd, &new_attributes);
+        if(status < 0 || !isatty(pimpl->fd))
         {
             ::close(pimpl->fd);
-            setErrorMessage("Unsupported baud rate");
+            setErrorMessage("Device is not a tty");
             return false;
         }
+        new_attributes.c_iflag = IGNBRK;
+        new_attributes.c_oflag = 0;
+        new_attributes.c_lflag = 0;
+        new_attributes.c_cflag = (CS8 | CREAD | CLOCAL);//8 data bit,Enable receiver,Ignore modem
+        /* In non canonical mode (Ctrl-C and other disabled, no echo,...) VMIN and VTIME work this way:
+        if the function read() has'nt read at least VMIN chars it waits until has read at least VMIN
+        chars (even if VTIME timeout expires); once it has read at least vmin chars, if subsequent
+        chars do not arrive before VTIME expires, it returns error; if a char arrives, it resets the
+        timeout, so the internal timer will again start from zero (for the nex char,if any)*/
+        new_attributes.c_cc[VMIN]=1;// Minimum number of characters to read before returning error
+        new_attributes.c_cc[VTIME]=1;// Set timeouts in tenths of second
+
+        // Set baud rate
+        switch(baud_rate)
+        {
+            case 50:speed = B50; break;
+            case 75:speed = B75; break;
+            case 110:speed = B110; break;
+            case 134:speed = B134; break;
+            case 150:speed = B150; break;
+            case 200:speed = B200; break;
+            case 300:speed = B300; break;
+            case 600:speed = B600; break;
+            case 1200:speed = B1200; break;
+            case 1800:speed = B1800; break;
+            case 2400:speed = B2400; break;
+            case 4800:speed = B4800; break;
+            case 9600:speed = B9600; break;
+            case 19200:speed = B19200; break;
+            case 38400:speed = B38400; break;
+            case 57600:speed = B57600; break;
+            case 115200:speed = B115200; break;
+            case 230400:speed = B230400; break;
+    #ifdef B307200
+            case 307200:speed = B307200; break;
+    #endif
+    #ifdef B460800
+            case 460800:speed = B460800; break;
+    #endif
+            default:
+            {
+                ::close(pimpl->fd);
+                setErrorMessage("Unsupported baud rate");
+                return false;
+            }
+        }
+
+        cfsetospeed(&new_attributes, speed);
+        cfsetispeed(&new_attributes, speed);
+
+        // Make changes effective
+        status=tcsetattr(pimpl->fd, TCSANOW, &new_attributes);
+        if(status<0)
+        {
+            ::close(pimpl->fd);
+            setErrorMessage("Can't set port attributes");
+            return false;
+        }
+
+        // Clear the O_NONBLOCK flag
+        status = fcntl(pimpl->fd, F_GETFL, 0);
+        if(status != -1) 
+            fcntl(pimpl->fd, F_SETFL, status & ~O_NONBLOCK);
     }
-
-    cfsetospeed(&new_attributes, speed);
-    cfsetispeed(&new_attributes, speed);
-
-    // Make changes effective
-    status=tcsetattr(pimpl->fd, TCSANOW, &new_attributes);
-    if(status<0)
-    {
-        ::close(pimpl->fd);
-        setErrorMessage("Can't set port attributes");
-        return false;
-    }
-
-    // Clear the O_NONBLOCK flag
-    status = fcntl(pimpl->fd, F_GETFL, 0);
-    if(status != -1) 
-        fcntl(pimpl->fd, F_SETFL, status & ~O_NONBLOCK);
+    
 #endif
 
     setErrorStatus(false);//If we get here, no error
@@ -230,19 +230,15 @@ bool SerialPort::errorStatus() const
 
 void SerialPort::close()
 {
-    if(!isOpen()) return;
+    if(!isOpen()) 
+        return;
 
-    pimpl->open=false;
+    pimpl->open = false;
 
 #if defined(_WIN32) || defined(__CYGWIN__)
-
-	HANDLE io_handler_ = (HANDLE)pimpl->fd;
-	::CloseHandle(io_handler_);
-
+	::CloseHandle(pimpl->fd);
 #elif defined(__APPLE__) || defined(__linux__)
-
     ::close(pimpl->fd); //The thread waiting on I/O should return
-
 #endif
 
     pimpl->backgroundThread.join();
@@ -280,9 +276,7 @@ void SerialPort::writeString(const std::string& s)
 SerialPort::~SerialPort()
 {
     if(isOpen())
-    {
         close();
-    }
 }
 
 void SerialPort::doRead()
@@ -292,9 +286,8 @@ void SerialPort::doRead()
     {
 #if defined(_WIN32) || defined(__CYGWIN__)
 
-        HANDLE io_handler_ = (HANDLE)pimpl->fd;
 	    DWORD received;
-	    ::ReadFile(io_handler_, pimpl->readBuffer, readBufferSize, &received, NULL);
+	    ::ReadFile(pimpl->fd, pimpl->readBuffer, readBufferSize, &received, NULL);
 
 #elif defined(__APPLE__) || defined(__linux__)
 
@@ -302,7 +295,7 @@ void SerialPort::doRead()
 
 #endif
 
-        if(received<0)
+        if(received < 0)
         {
             if(!isOpen()) 
                 return; // Thread interrupted because port closed
