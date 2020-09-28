@@ -18,7 +18,11 @@ if (WIN32)
 endif()
 
 if(${CYGWIN})
-    add_definitions(-D_WIN32_WINNT=0x0501)
+    add_definitions(-D_WIN32_WINNT=_WIN32_WINNT_WIN7)
+    add_definitions(-DNTDDI_VERSION=NTDDI_WIN7)
     add_definitions(-D__USE_W32_SOCKETS)
     add_definitions(-D_SCL_SECURE_NO_WARNINGS)
+    # Fix for error: 'fd_set' does not name a type while building with Boost.Asio
+    # Source: https://stackoverflow.com/questions/39894006/how-to-use-boost-asio-library-with-cygwin-64-bit
+    add_definitions(-D_XOPEN_SOURCE=500)
 endif()
