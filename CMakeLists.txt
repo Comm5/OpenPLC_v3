@@ -240,6 +240,13 @@ if(OPLC_MAIN_PROGRAM)
     include_directories(runtime/vendor/spdlog-1.3.1)
     include_directories(runtime/vendor/inih-r46)
     include_directories(./include)
+    if (CYGWIN)
+        find_package(Boost REQUIRED COMPONENTS system thread)
+        include_directories(${Boost_INCLUDE_DIRS})
+        link_directories(${Boost_LIBRARY_DIRS})
+    else()
+        include_directories(runtime/vendor/boost-1.74.0)
+    endif()
 
     # The makefile based project put their libs here
     link_directories(./lib)
