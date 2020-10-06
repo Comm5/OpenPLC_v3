@@ -74,6 +74,11 @@ enum RequestState {
 	QuerySensorState
 } reqState;
 
+typedef struct
+{
+    std::string serialPort;
+} configuration;
+
 // Forward declarations
 static void parseFrame(std::string & frame);
 
@@ -271,6 +276,16 @@ static void parseFrame(std::string & frame)
 	}
 }
 
+static int config_handler(void* user, const char* section, const char* name,
+                   const char* value)
+{
+    configuration* pconfig = (configuration*)user;
+
+    if (oplc::ini_matches("comm5", "port", section, name))
+        pconfig->serialPort = value;
+    return 0;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 /// \brief Initialization procedures
 ///
@@ -279,7 +294,16 @@ static void parseFrame(std::string & frame)
 ////////////////////////////////////////////////////////////////////////////////
 void initializeHardware()
 {
-	if (!serialPort.open("COM4", 115200))
+	configuration config;
+
+	const char* config_path = oplc::get_config_path();
+    if (ini_parse(config_path, config_handler, &config) < 0)
+    {
+        spdlog::info("Config file {} could not be read, MA-4200 support disabled", config_path);
+		return;
+    }
+
+	if (!serialPort.open(config.serialPort, 115200))
 	{
 		spdlog::error("Comm5 MA-4200: Error trying to open serial port\n");
 		return;
